@@ -90,4 +90,3 @@ tccutil reset AudioCapture com.yourname.blank3
 <sub>**EN:** BLANK3.0 is a free, open-source per-app volume mixer for macOS (menu bar). Control the volume of each application separately: an alternative to paid volume-control apps. Built with Swift and Core Audio Process Taps.</sub>
 
 <sub>Лицензия [MIT](LICENSE).</sub>
-# blank-mixer

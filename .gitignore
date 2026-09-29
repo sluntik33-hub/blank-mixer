@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+# Xcode / сборка
+build/
+dist/
+DerivedData/
+*.xcodeproj/
+xcuserdata/
+*.xcuserstate
+# артефакты
+*.dmg
+*.dmg.sha256
+*.zip

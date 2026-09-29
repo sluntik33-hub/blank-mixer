@@ -1,0 +1,20 @@
+# Автосборка: пушите тег вида v3.0 — GitHub сам соберёт DMG и выложит его в Releases.
+name: Release DMG
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen create-dmg
+      - run: ./make-dmg.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.sha256
+          generate_release_notes: true

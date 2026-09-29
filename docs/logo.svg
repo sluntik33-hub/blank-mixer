@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="g3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#C9A6FF"/>
+      <stop offset="100%" stop-color="#6A2FC9"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#150A24"/>
+
+  <!-- сверху прямоугольник (окно приложения) -->
+  <rect x="24" y="24" width="80" height="42" rx="8" fill="#2A1848" stroke="#6A3BC2" stroke-width="3"/>
+
+  <!-- снизу силуэт фейдера (как в варианте 4) -->
+  <rect x="24" y="86" width="80" height="12" rx="6" fill="#2A1848"/>
+  <rect x="24" y="86" width="50" height="12" rx="6" fill="url(#g3)"/>
+  <circle cx="74" cy="92" r="14" fill="#F3EAFF"/>
+  <circle cx="74" cy="92" r="14" fill="none" stroke="#9C5CFB" stroke-width="3"/>
+</svg>
