@@ -17,7 +17,29 @@ final class AudioAppItem: ObservableObject, Identifiable {
 
     /// 0...1 — положение слайдера
     @Published var volume: Double = 1.0 {
-        didSet { if oldValue != volume { onChange?() } }
+        didSet {
+            guard oldValue != volume else { return }
+            // Потянули ползунок вверх у заглушённого приложения — снимаем mute.
+            if isMuted && volume > 0.001 { isMuted = false }
+            onChange?()
+        }
+    }
+    /// Громкость до нажатия mute — чтобы вернуть её при повторном нажатии.
+    private var volumeBeforeMute: Double = 1.0
+
+    /// Mute: ползунок уезжает в 0. Повторно — возвращается на прежнее место.
+    func toggleMute() { setMuted(!isMuted) }
+
+    func setMuted(_ muted: Bool) {
+        guard muted != isMuted else { return }
+        if muted {
+            volumeBeforeMute = volume > 0.001 ? volume : 1.0
+            isMuted = true
+            volume = 0
+        } else {
+            isMuted = false
+            volume = volumeBeforeMute
+        }
     }
     @Published var isMuted: Bool = false {
         didSet { if oldValue != isMuted { onChange?() } }
@@ -71,53 +93,63 @@ enum RunningAppsProvider {
     static func currentCandidates() -> [Candidate] {
         let selfPID = ProcessInfo.processInfo.processIdentifier
 
-        let rawPIDs = AudioProcessDiscovery.audioCapableProcessPIDs()
-            .filter { $0 != selfPID && !isNoisySystemProcess(pid: $0) }
-
-        struct GroupInfo {
-            var pids: [pid_t] = []
-            var bundleID: String?
-            var name: String = ""
-            var icon: NSImage = NSImage()
+        // Только ОТКРЫТЫЕ приложения (те, что видны в Dock).
+        var appsByPID: [pid_t: NSRunningApplication] = [:]
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            appsByPID[app.processIdentifier] = app
         }
 
+        struct GroupInfo {
+            var pids: Set<pid_t> = []
+            let app: NSRunningApplication
+        }
         var groups: [String: GroupInfo] = [:]
 
-        for pid in rawPIDs {
-            let path = executablePath(for: pid)
-            let key = groupKey(forExecutablePath: path, pid: pid)
-            groups[key, default: GroupInfo()].pids.append(pid)
-
-            guard groups[key]?.name.isEmpty != false else { continue }
-
-            if let path, let appPath = topLevelAppPath(from: path) {
-                let bundle = Bundle(path: appPath)
-                let displayName = (bundle?.infoDictionary?["CFBundleDisplayName"] as? String)
-                    ?? (bundle?.infoDictionary?["CFBundleName"] as? String)
-                    ?? (appPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
-                groups[key]?.name = displayName
-                groups[key]?.icon = NSWorkspace.shared.icon(forFile: appPath)
-                groups[key]?.bundleID = bundle?.bundleIdentifier
-            } else {
-                groups[key]?.name = processName(for: pid) ?? "PID \(pid)"
-                groups[key]?.icon = fallbackIcon()
-            }
+        for pid in AudioProcessDiscovery.audioCapableProcessPIDs() where pid != selfPID {
+            // Звук часто играет не само приложение, а его служебный процесс
+            // (com.apple.WebKit.GPU у Safari/Telegram/Claude, хелперы
+            // Chrome/Opera). macOS знает, какое приложение «отвечает» за
+            // такой процесс — привязываем звук к нему, а не показываем
+            // отдельной строкой.
+            let owner = responsiblePID(for: pid)
+            guard let app = appsByPID[owner] ?? appsByPID[pid],
+                  app.processIdentifier != selfPID else { continue }
+            let key = app.bundleURL?.path ?? "pid:\(app.processIdentifier)"
+            groups[key, default: GroupInfo(app: app)].pids.insert(pid)
         }
 
         // DAW (FL Studio, Ableton, Logic и т.п.) работают с аудиоустройством
-        // напрямую и чувствительны к задержкам/агрегатам — их не трогаем
-        // вообще и не показываем в микшере.
+        // напрямую — их не трогаем вообще и не показываем.
         let proAudio = ["com.image-line", "com.ableton", "com.apple.logic", "com.bitwig",
                         "com.presonus", "com.cockos.reaper", "com.steinberg", "com.avid"]
-        groups = groups.filter { key, info in
-            let id = info.bundleID?.lowercased() ?? ""
-            let path = key.lowercased()
-            return !proAudio.contains { id.hasPrefix($0) } && !path.contains("fl studio")
-        }
 
-        return groups.map { key, info in
-            Candidate(groupKey: key, pids: Set(info.pids), bundleID: info.bundleID, name: info.name, icon: info.icon)
+        return groups.compactMap { key, info in
+            let id = info.app.bundleIdentifier?.lowercased() ?? ""
+            if proAudio.contains(where: { id.hasPrefix($0) }) || key.lowercased().contains("fl studio") {
+                return nil
+            }
+            return Candidate(
+                groupKey: key,
+                pids: info.pids,
+                bundleID: info.app.bundleIdentifier,
+                name: info.app.localizedName ?? (key as NSString).lastPathComponent,
+                icon: info.app.icon ?? fallbackIcon()
+            )
         }
+    }
+
+    /// pid «ответственного» приложения для служебного процесса.
+    /// Функция есть в libSystem, но не в публичных заголовках — берём через dlsym.
+    private typealias ResponsibleFn = @convention(c) (pid_t) -> pid_t
+    private nonisolated(unsafe) static let responsibleFn: ResponsibleFn? = {
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid") else { return nil }
+        return unsafeBitCast(sym, to: ResponsibleFn.self)
+    }()
+
+    private static func responsiblePID(for pid: pid_t) -> pid_t {
+        guard let fn = responsibleFn else { return pid }
+        let r = fn(pid)
+        return r > 0 ? r : pid
     }
 
     private static func groupKey(forExecutablePath path: String?, pid: pid_t) -> String {

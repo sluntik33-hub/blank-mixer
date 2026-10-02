@@ -1,19 +1,19 @@
 import SwiftUI
 
-// MARK: - Тема «Graphite / Mint»
+// MARK: - Тема «Turquoise / Deep Purple»
 
 enum Theme {
-    static let bg          = Color(red: 0.067, green: 0.074, blue: 0.086)
-    static let card        = Color(red: 0.105, green: 0.114, blue: 0.130)
-    static let cardHover   = Color(red: 0.135, green: 0.146, blue: 0.165)
-    static let stroke      = Color.white.opacity(0.06)
-    static let track       = Color.white.opacity(0.09)
-    static let mint        = Color(red: 0.24, green: 0.90, blue: 0.69)
-    static let sky         = Color(red: 0.23, green: 0.72, blue: 0.96)
-    static let coral       = Color(red: 1.00, green: 0.45, blue: 0.42)
-    static let text        = Color.white.opacity(0.94)
-    static let textDim     = Color.white.opacity(0.48)
-    static let textFaint   = Color.white.opacity(0.28)
+    static let bg          = Color(red: 0.086, green: 0.047, blue: 0.145)
+    static let card        = Color(red: 0.137, green: 0.082, blue: 0.220)
+    static let cardHover   = Color(red: 0.170, green: 0.105, blue: 0.265)
+    static let stroke      = Color.white.opacity(0.07)
+    static let track       = Color.white.opacity(0.10)
+    static let mint        = Color(red: 0.19, green: 0.86, blue: 0.80)   // бирюзовый
+    static let sky         = Color(red: 0.25, green: 0.93, blue: 0.86)   // светлый бирюзовый
+    static let coral       = Color(red: 1.00, green: 0.45, blue: 0.52)
+    static let text        = Color.white.opacity(0.95)
+    static let textDim     = Color.white.opacity(0.52)
+    static let textFaint   = Color.white.opacity(0.30)
 
     static let accent = LinearGradient(colors: [mint, sky], startPoint: .leading, endPoint: .trailing)
     static let muted  = LinearGradient(colors: [textFaint, textFaint], startPoint: .leading, endPoint: .trailing)
@@ -51,7 +51,7 @@ struct MixerView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Theme.accent)
                     .frame(width: 28, height: 28)
-                Image(systemName: "dial.medium.fill")
+                Image(systemName: "slider.horizontal.below.rectangle")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Theme.bg)
             }
@@ -178,7 +178,7 @@ private struct AppRow: View {
                         .truncationMode(.tail)
                     if item.isPlayingAudio && !item.isMuted { EqualizerBars() }
                     Spacer(minLength: 4)
-                    Button { item.volume = 1.0 } label: {
+                    Button { item.setMuted(false); item.volume = 1.0 } label: {
                         Text(item.isMuted ? "MUTE" : "\(Int((item.volume * 100).rounded()))%")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(item.isMuted ? Theme.coral : Theme.textDim)
@@ -192,7 +192,7 @@ private struct AppRow: View {
                 VolumeSlider(value: $item.volume, thickness: 5, dimmed: item.isMuted)
             }
 
-            Button { item.isMuted.toggle() } label: {
+            Button { item.toggleMute() } label: {
                 Image(systemName: item.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(item.isMuted ? Theme.coral : Theme.text)

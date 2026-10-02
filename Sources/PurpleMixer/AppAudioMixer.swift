@@ -138,12 +138,12 @@ final class AppAudioMixer: ObservableObject {
     }
 
     func muteAll(_ muted: Bool) {
-        for item in apps { item.isMuted = muted }
+        for item in apps { item.setMuted(muted) }
     }
 
     func resetAll() {
         for item in apps {
-            item.isMuted = false
+            item.setMuted(false)
             item.volume = 1.0
         }
     }

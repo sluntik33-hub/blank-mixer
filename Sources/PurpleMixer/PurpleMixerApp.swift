@@ -15,7 +15,7 @@ struct BlankMixerApp: App {
             MixerView()
                 .environmentObject(appDelegate.mixer)
         } label: {
-            Image(systemName: "dial.medium.fill")
+            Image(systemName: "slider.horizontal.below.rectangle")
         }
         .menuBarExtraStyle(.window)
     }

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>ru</string>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>BLANK3.0</string>
 	<key>CFBundleExecutable</key>
@@ -13,16 +13,16 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>BLANK3.0</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>15.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>3.0</string>
+	<key>CFBundleVersion</key>
+	<string>3</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>BLANK3.0 нужен доступ к системному аудио, чтобы регулировать громкость каждого приложения отдельно.</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>MIT License</string>
+	<string>BLANK3.0 нужен доступ к системному аудио, чтобы показывать и регулировать громкость каждого приложения по отдельности.</string>
 </dict>
 </plist>

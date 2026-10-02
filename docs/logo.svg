@@ -1,18 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="g3" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#C9A6FF"/>
-      <stop offset="100%" stop-color="#6A2FC9"/>
-    </linearGradient>
-  </defs>
-  <rect width="128" height="128" rx="28" fill="#150A24"/>
-
-  <!-- сверху прямоугольник (окно приложения) -->
-  <rect x="24" y="24" width="80" height="42" rx="8" fill="#2A1848" stroke="#6A3BC2" stroke-width="3"/>
-
-  <!-- снизу силуэт фейдера (как в варианте 4) -->
-  <rect x="24" y="86" width="80" height="12" rx="6" fill="#2A1848"/>
-  <rect x="24" y="86" width="50" height="12" rx="6" fill="url(#g3)"/>
-  <circle cx="74" cy="92" r="14" fill="#F3EAFF"/>
-  <circle cx="74" cy="92" r="14" fill="none" stroke="#9C5CFB" stroke-width="3"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A1550"/><stop offset="1" stop-color="#120725"/></linearGradient>
+<linearGradient id="tq" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7FF5E6"/><stop offset="1" stop-color="#2FDBCC"/></linearGradient>
+<filter id="gl" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="18" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+<rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="4"/>
+<rect x="250" y="270" width="524" height="400" rx="56" fill="#1C0C38" stroke="#ffffff" stroke-opacity="0.18" stroke-width="8"/>
+<circle cx="310" cy="325" r="13" fill="#FF6F86"/><circle cx="350" cy="325" r="13" fill="#FFC861"/><circle cx="390" cy="325" r="13" fill="#2FDBCC"/>
+<rect x="310" y="410" width="404" height="22" rx="11" fill="#fff" fill-opacity="0.12"/><rect x="310" y="410" width="290" height="22" rx="11" fill="url(#tq)"/><circle cx="600" cy="421" r="30" fill="#fff"/>
+<rect x="310" y="520" width="404" height="22" rx="11" fill="#fff" fill-opacity="0.12"/><rect x="310" y="520" width="170" height="22" rx="11" fill="url(#tq)"/><circle cx="480" cy="531" r="30" fill="#fff"/>
+<rect x="380" y="720" width="264" height="26" rx="13" fill="url(#tq)" filter="url(#gl)"/></svg>
