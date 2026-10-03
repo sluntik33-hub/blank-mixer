@@ -36,6 +36,11 @@ final class AppAudioTap: @unchecked Sendable {
     private let targetGainBits = Atomic<UInt64>(Double(1).bitPattern)
     /// Текущий (сглаженный) gain — трогается ТОЛЬКО из IO-потока.
     private var currentGain: Float = 1
+    /// Индекс входного буфера, в котором приходит звук тапа (а не микрофон).
+    private var tapBufferIndex: Int = -1
+    /// Счётчик вызовов IO — по нему микшер понимает, что тап «завис».
+    private let heartbeat = Atomic<UInt64>(0)
+    var heartbeatValue: UInt64 { heartbeat.load(ordering: .relaxed) }
 
     init(pids: Set<pid_t>) {
         self.pids = pids
@@ -65,7 +70,12 @@ final class AppAudioTap: @unchecked Sendable {
         tapID = newTapID
 
         do {
-            guard let outputUID = CoreAudioUtils.defaultOutputDeviceUID() else {
+            // Звонилки (MAX, Zoom, Discord, Telegram) часто выводят звук НЕ на
+            // системное устройство по умолчанию, а на выбранное в своих
+            // настройках. Раньше мы глушили оригинал там, а копию играли на
+            // устройство по умолчанию — звук «пропадал» или уходил не туда.
+            guard let outputUID = CoreAudioUtils.outputDeviceUID(forPIDs: pids)
+                    ?? CoreAudioUtils.defaultOutputDeviceUID() else {
                 throw TapError.outputDeviceNotFound
             }
             outputDeviceUID = outputUID
@@ -110,24 +120,39 @@ final class AppAudioTap: @unchecked Sendable {
         guard status == noErr, let procID else { throw TapError.ioProcFailed(status) }
         ioProcID = procID
 
-        // ФИКС КОНФЛИКТА С AIRPODS / FL STUDIO:
-        // агрегат содержит устройство вывода как sub-device. Если у него есть
-        // МИКРОФОН (AirPods, гарнитуры), то без этой настройки наш IOProc
-        // открывал и микрофон тоже. У AirPods открытие микрофона = переход в
-        // режим гарнитуры (HFP): частота падает до 16/24 кГц, устройство
-        // пересоздаётся — и FL Studio теряет своё аудиоустройство
-        // («Could not enable the CoreAudio device», транспорт стоит).
-        // Включаем для нашего IOProc ТОЛЬКО входные потоки тапа.
-        disableSubDeviceInputs(procID: procID)
+        // Включаем для нашего IOProc ТОЛЬКО поток тапа. Входы sub-device
+        // (микрофон AirPods/гарнитуры) не открываем: иначе AirPods уходят в
+        // режим гарнитуры и ломают FL Studio. И главное — ТОЧНО находим, какой
+        // из входных буферов тап: во время звонка у гарнитуры активен
+        // микрофон, и раньше мы могли взять поток микрофона вместо звука
+        // приложения → при громкости < 100% звук звонка полностью пропадал.
+        selectTapStream(procID: procID)
+        guard tapBufferIndex >= 0 else { throw TapError.tapStreamNotFound }
 
         let startStatus = AudioDeviceStart(aggregateDeviceID, procID)
         guard startStatus == noErr else { throw TapError.deviceStartFailed(startStatus) }
     }
 
-    private func disableSubDeviceInputs(procID: AudioDeviceIOProcID) {
-        guard let outputDevice = CoreAudioUtils.defaultOutputDevice() else { return }
-        let micStreams = CoreAudioUtils.streamCount(of: outputDevice, scope: kAudioObjectPropertyScopeInput)
-        guard micStreams > 0 else { return } // у устройства нет микрофона — всё ок
+    private func selectTapStream(procID: AudioDeviceIOProcID) {
+        let streams = CoreAudioUtils.streams(of: aggregateDeviceID, scope: kAudioObjectPropertyScopeInput)
+        guard !streams.isEmpty else { return }
+
+        let tapChannels = CoreAudioUtils.tapChannelCount(tapID) ?? 2
+        let micStreams = streams.count >= 2
+            ? CoreAudioUtils.streams(of: CoreAudioUtils.deviceID(forUID: outputDeviceUID) ?? 0,
+                                     scope: kAudioObjectPropertyScopeInput).count
+            : 0
+        let channels = streams.map { CoreAudioUtils.streamChannelCount($0) }
+
+        // Потоки тапа обычно идут после входов sub-device. Проверяем это по
+        // числу каналов; если не сходится — тап стоит первым.
+        let tapCount = max(1, streams.count - micStreams)
+        let lastFirst = streams.count - tapCount
+        var index = lastFirst
+        if micStreams > 0, channels[lastFirst] != tapChannels, channels[0] == tapChannels {
+            index = 0
+        }
+        tapBufferIndex = index
 
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyIOProcStreamUsage,
@@ -135,7 +160,8 @@ final class AppAudioTap: @unchecked Sendable {
             mElement: kAudioObjectPropertyElementMain
         )
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(aggregateDeviceID, &addr, 0, nil, &size) == noErr, size > 0 else { return }
+        guard micStreams > 0,
+              AudioObjectGetPropertyDataSize(aggregateDeviceID, &addr, 0, nil, &size) == noErr, size > 0 else { return }
 
         let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 8)
         defer { raw.deallocate() }
@@ -146,13 +172,13 @@ final class AppAudioTap: @unchecked Sendable {
         let countOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mNumberStreams) ?? 8
         let flagsOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn) ?? 12
         let n = Int(raw.load(fromByteOffset: countOffset, as: UInt32.self))
+        let tapRange = index..<(index + tapCount)
         for i in 0..<n {
-            // Сначала идут входы sub-device (микрофон), потом — потоки тапа.
-            let on: UInt32 = i >= micStreams ? 1 : 0
+            let on: UInt32 = tapRange.contains(i) ? 1 : 0
             raw.storeBytes(of: on, toByteOffset: flagsOffset + i * MemoryLayout<UInt32>.size, as: UInt32.self)
         }
         let st = AudioObjectSetPropertyData(aggregateDeviceID, &addr, 0, nil, size, raw)
-        log.notice("IOProcStreamUsage: mic streams off=\(micStreams) total=\(n) status=\(st)")
+        log.notice("tap stream index=\(index) of \(n), mic streams=\(micStreams), usage status=\(st)")
     }
 
     /// Realtime-поток: никаких аллокаций, локов и логов.
@@ -166,9 +192,8 @@ final class AppAudioTap: @unchecked Sendable {
         }
         guard inABL.count > 0, outABL.count > 0 else { return }
 
-        // Потоки тапа в агрегате идут ПОСЛЕ входных потоков sub-device
-        // (например, микрофона гарнитуры) — поэтому берём последние буферы.
-        let lastIn = inABL[inABL.count - 1]
+        let idx = (tapBufferIndex >= 0 && tapBufferIndex < inABL.count) ? tapBufferIndex : inABL.count - 1
+        let lastIn = inABL[idx]
         let leftPtr: UnsafeMutablePointer<Float>
         let rightPtr: UnsafeMutablePointer<Float>
         let inStride: Int
@@ -180,12 +205,13 @@ final class AppAudioTap: @unchecked Sendable {
             inStride = Int(lastIn.mNumberChannels)
             inFrames = Int(lastIn.mDataByteSize) / (MemoryLayout<Float>.size * inStride)
             leftPtr = d; rightPtr = d; rightOffset = 1
-        } else if inABL.count >= 2 {
-            let lBuf = inABL[inABL.count - 2]
+        } else if idx + 1 < inABL.count, inABL[idx + 1].mNumberChannels == 1 {
+            let lBuf = lastIn
+            let rBuf = inABL[idx + 1]
             guard let l = lBuf.mData?.assumingMemoryBound(to: Float.self),
-                  let r = lastIn.mData?.assumingMemoryBound(to: Float.self) else { return }
+                  let r = rBuf.mData?.assumingMemoryBound(to: Float.self) else { return }
             inStride = 1
-            inFrames = min(Int(lBuf.mDataByteSize), Int(lastIn.mDataByteSize)) / MemoryLayout<Float>.size
+            inFrames = min(Int(lBuf.mDataByteSize), Int(rBuf.mDataByteSize)) / MemoryLayout<Float>.size
             leftPtr = l; rightPtr = r; rightOffset = 0
         } else {
             guard let d = lastIn.mData?.assumingMemoryBound(to: Float.self) else { return }
@@ -194,6 +220,8 @@ final class AppAudioTap: @unchecked Sendable {
             leftPtr = d; rightPtr = d; rightOffset = 0
         }
         guard inFrames > 0 else { return }
+        // «Живой» тап = есть данные от тапа, а не просто вызовы IO.
+        heartbeat.add(1, ordering: .relaxed)
 
         // Плавно ведём gain к цели, чтобы не было щелчков при движении слайдера.
         let target = Float(Double(bitPattern: targetGainBits.load(ordering: .relaxed)))
@@ -243,6 +271,7 @@ final class AppAudioTap: @unchecked Sendable {
         case aggregateFailed(OSStatus)
         case ioProcFailed(OSStatus)
         case deviceStartFailed(OSStatus)
+        case tapStreamNotFound
     }
 }
 
@@ -278,6 +307,68 @@ enum CoreAudioUtils {
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device
         )
         return (status == noErr && device != kAudioObjectUnknown) ? device : nil
+    }
+
+    static func streams(of device: AudioObjectID, scope: AudioObjectPropertyScope) -> [AudioStreamID] {
+        guard device != kAudioObjectUnknown else { return [] }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var ids = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    static func streamChannelCount(_ stream: AudioStreamID) -> UInt32 {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioStreamPropertyVirtualFormat, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var asbd = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        return AudioObjectGetPropertyData(stream, &addr, 0, nil, &size, &asbd) == noErr ? asbd.mChannelsPerFrame : 0
+    }
+
+    static func tapChannelCount(_ tap: AudioObjectID) -> UInt32? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioTapPropertyFormat, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var asbd = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        return AudioObjectGetPropertyData(tap, &addr, 0, nil, &size, &asbd) == noErr ? asbd.mChannelsPerFrame : nil
+    }
+
+    static func deviceID(forUID uid: String) -> AudioObjectID? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var cfUID = uid as CFString
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let st = withUnsafeMutablePointer(to: &cfUID) {
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                       UInt32(MemoryLayout<CFString>.size), $0, &size, &device)
+        }
+        return (st == noErr && device != kAudioObjectUnknown) ? device : nil
+    }
+
+    /// Реальное устройство, на которое приложение СЕЙЧАС выводит звук.
+    /// Агрегаты (например, VoiceProcessing у звонилок) пропускаем — на них
+    /// нельзя строить наш агрегат; тогда берём устройство по умолчанию.
+    static func outputDeviceUID(forPIDs pids: Set<pid_t>) -> String? {
+        for pid in pids.sorted() {
+            guard let process = processObjectID(for: pid) else { continue }
+            var addr = AudioObjectPropertyAddress(mSelector: kAudioProcessPropertyDevices, mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
+            var size: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(process, &addr, 0, nil, &size) == noErr, size > 0 else { continue }
+            var devices = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+            guard AudioObjectGetPropertyData(process, &addr, 0, nil, &size, &devices) == noErr else { continue }
+            for device in devices where !isAggregate(device) && !streams(of: device, scope: kAudioObjectPropertyScopeOutput).isEmpty {
+                if let uid = stringProperty(kAudioDevicePropertyDeviceUID, of: device) { return uid }
+            }
+        }
+        return nil
+    }
+
+    static func isAggregate(_ device: AudioObjectID) -> Bool {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var t: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &t) == noErr else { return false }
+        return t == kAudioDeviceTransportTypeAggregate
     }
 
     static func streamCount(of device: AudioObjectID, scope: AudioObjectPropertyScope) -> Int {

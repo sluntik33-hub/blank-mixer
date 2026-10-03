@@ -26,6 +26,10 @@ final class AppAudioMixer: ObservableObject {
     private var taps: [String: AppAudioTap] = [:]
     private var itemsByKey: [String: AudioAppItem] = [:]
     private var order: [String] = []
+    /// Сторож: последний увиденный heartbeat тапа и число неудачных попыток.
+    private var lastHeartbeat: [String: UInt64] = [:]
+    private var failures: [String: Int] = [:]
+    private var lastHealthCheck: [String: Date] = [:]
     private var refreshTimer: Timer?
     private var isApplyingExternalVolume = false
 
@@ -51,6 +55,8 @@ final class AppAudioMixer: ObservableObject {
                 // их надо пересобрать, иначе звук «уходит» в старые колонки.
                 guard let self else { return }
                 self.stopAllTaps()
+                self.failures.removeAll()
+                for item in self.apps where item.tapUnavailable { item.tapUnavailable = false }
                 self.refresh()
             }
         )
@@ -92,6 +98,7 @@ final class AppAudioMixer: ObservableObject {
             if item.pids != candidate.pids { item.pids = candidate.pids }
             let playing = AudioProcessDiscovery.isCurrentlyPlaying(pids: candidate.pids)
             if item.isPlayingAudio != playing { item.isPlayingAudio = playing }
+            checkHealth(forKey: candidate.groupKey)
             syncTap(forKey: candidate.groupKey)
         }
 
@@ -107,6 +114,14 @@ final class AppAudioMixer: ObservableObject {
 
         guard item.needsProcessing else {
             taps.removeValue(forKey: key)?.stop()
+            failures[key] = 0
+            if item.tapUnavailable { item.tapUnavailable = false }
+            return
+        }
+        // Регулировка для этого приложения не заработала несколько раз
+        // подряд — лучше оставить оригинальный звук, чем тишину.
+        guard !item.tapUnavailable else {
+            taps.removeValue(forKey: key)?.stop()
             return
         }
 
@@ -114,7 +129,10 @@ final class AppAudioMixer: ObservableObject {
             // Состав процессов изменился (новая вкладка браузера = новый
             // хелпер). Старый тап его не захватывает — этот процесс играл бы
             // мимо регулятора на полной громкости. Пересоздаём.
-            if tap.pids == item.pids && tap.outputDeviceUID == (CoreAudioUtils.defaultOutputDeviceUID() ?? tap.outputDeviceUID) {
+            let expectedDevice = CoreAudioUtils.outputDeviceUID(forPIDs: item.pids)
+                ?? CoreAudioUtils.defaultOutputDeviceUID()
+                ?? tap.outputDeviceUID
+            if tap.pids == item.pids && tap.outputDeviceUID == expectedDevice {
                 tap.setGain(item.gain)
                 return
             }
@@ -125,10 +143,44 @@ final class AppAudioMixer: ObservableObject {
         do {
             try tap.start(initialGain: item.gain)
             taps[key] = tap
+            lastHeartbeat[key] = nil
             if permissionDenied { permissionDenied = false }
         } catch {
             mixerLog.error("tap for \(key, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             if case AppAudioTap.TapError.creationFailed = error { permissionDenied = true }
+            registerFailure(forKey: key)
+        }
+    }
+
+    /// Если IO-колбэк тапа перестал вызываться (сменился профиль AirPods при
+    /// звонке, устройство пересоздалось, звонилка перезапустила аудио), то
+    /// оригинал заглушён, а копия не играет → тишина. Пересобираем тап.
+    private func checkHealth(forKey key: String) {
+        guard let tap = taps[key] else { return }
+        // Судим только раз в ~секунду: IO вызывается каждые ~10 мс, но два
+        // refresh() подряд (открытие окна + таймер) могут прийти почти разом.
+        let now = Date()
+        if let last = lastHealthCheck[key], now.timeIntervalSince(last) < 1.0 { return }
+        lastHealthCheck[key] = now
+        let beat = tap.heartbeatValue
+        defer { lastHeartbeat[key] = beat }
+        guard let previous = lastHeartbeat[key] else { return }
+        if beat == previous {
+            mixerLog.error("tap for \(key, privacy: .public) stalled — rebuilding")
+            taps.removeValue(forKey: key)?.stop()
+            lastHeartbeat[key] = nil
+            registerFailure(forKey: key)
+        } else {
+            failures[key] = 0
+        }
+    }
+
+    private func registerFailure(forKey key: String) {
+        let count = (failures[key] ?? 0) + 1
+        failures[key] = count
+        if count >= 3, let item = itemsByKey[key] {
+            item.tapUnavailable = true
+            taps.removeValue(forKey: key)?.stop()
         }
     }
 

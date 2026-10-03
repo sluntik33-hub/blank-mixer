@@ -10,7 +10,9 @@ final class AudioAppItem: ObservableObject, Identifiable {
     /// Стабильный ключ группы: путь к .app бандлу / бинарнику / "pid:N".
     let id: String
     /// Меняется со временем (браузер открыл новую вкладку = новый хелпер).
-    @Published var pids: Set<pid_t>
+    @Published var pids: Set<pid_t> {
+        didSet { if oldValue != pids { tapUnavailable = false } }
+    }
     let bundleID: String?
     let name: String
     let icon: NSImage
@@ -45,6 +47,8 @@ final class AudioAppItem: ObservableObject, Identifiable {
         didSet { if oldValue != isMuted { onChange?() } }
     }
     @Published var isPlayingAudio: Bool = false
+    /// Регулировка не заработала для этого приложения — звук оставлен как есть.
+    @Published var tapUnavailable: Bool = false
 
     var onChange: (() -> Void)?
 
@@ -121,7 +125,10 @@ enum RunningAppsProvider {
         // DAW (FL Studio, Ableton, Logic и т.п.) работают с аудиоустройством
         // напрямую — их не трогаем вообще и не показываем.
         let proAudio = ["com.image-line", "com.ableton", "com.apple.logic", "com.bitwig",
-                        "com.presonus", "com.cockos.reaper", "com.steinberg", "com.avid"]
+                        "com.presonus", "com.cockos.reaper", "com.steinberg", "com.avid",
+                        "com.apple.garageband", "com.apple.mainstage", "com.native-instruments",
+                        // плееры с эксклюзивным (hog mode) доступом к устройству
+                        "com.audirvana", "com.roon", "com.colibri"]
 
         return groups.compactMap { key, info in
             let id = info.app.bundleIdentifier?.lowercased() ?? ""

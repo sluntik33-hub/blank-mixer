@@ -189,7 +189,12 @@ private struct AppRow: View {
                     .buttonStyle(.plain)
                     .help("Нажмите, чтобы вернуть 100%")
                 }
-                VolumeSlider(value: $item.volume, thickness: 5, dimmed: item.isMuted)
+                VolumeSlider(value: $item.volume, thickness: 5, dimmed: item.isMuted || item.tapUnavailable)
+                if item.tapUnavailable {
+                    Text("Регулировка недоступна — звук без изменений")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Theme.coral)
+                }
             }
 
             Button { item.toggleMute() } label: {
